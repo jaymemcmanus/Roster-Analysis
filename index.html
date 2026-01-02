@@ -13,7 +13,7 @@
     .card { background:#121c38; border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:14px; margin: 12px 0; }
     button, .btnlike { border:0; border-radius:12px; padding:12px 14px; background:#2b67f6; color:white; font-weight:600; }
     .secondary { background:#2a355b; }
-    textarea { width:100%; min-height:140px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:#0c1430; color:#e6e9ef; padding:12px; }
+    textarea { width:100%; min-height:160px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:#0c1430; color:#e6e9ef; padding:12px; }
     table { width:100%; border-collapse: collapse; }
     td, th { padding:8px; border-bottom:1px solid rgba(255,255,255,.08); text-align:left; vertical-align:top; }
     .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
@@ -69,7 +69,7 @@
     <div class="card">
       <h3 style="margin:0 0 8px 0;">2) Pay summary (v1)</h3>
       <div class="muted">
-        This version proves the pipeline. Next we’ll implement EBA rules (ODTA/DTA windows, own accom, WDO/OT buckets, credit triggers, etc.).
+        Parser sanity first, then we’ll implement EBA rules (ODTA/DTA, own accom, WDO/OT, etc.).
       </div>
       <div id="summary" style="margin-top:10px;"></div>
     </div>
@@ -84,7 +84,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 
   <!-- App logic (cache-busted) -->
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=9"></script>
 
   <script>
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
