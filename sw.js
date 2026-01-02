@@ -1,16 +1,36 @@
+const CACHE_NAME = 'va-pay-v7';
+
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
-    caches.open('va-pay-v4').then(cache => cache.addAll([
+    caches.open(CACHE_NAME).then(cache => cache.addAll([
       './',
       './index.html',
-      './app.js',
+      './app.js?v=7',
       './manifest.webmanifest'
     ]))
   );
 });
 
+self.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    // Delete all old caches
+    const keys = await caches.keys();
+    await Promise.all(keys.map(k => (k !== CACHE_NAME ? caches.delete(k) : Promise.resolve())));
+    await self.clients.claim();
+  })());
+});
+
 self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request).then(resp => resp || fetch(event.request))
-  );
+  event.respondWith((async () => {
+    const cached = await caches.match(event.request);
+    if (cached) return cached;
+    const resp = await fetch(event.request);
+    // Cache GET requests (best-effort)
+    if (event.request.method === 'GET') {
+      const cache = await caches.open(CACHE_NAME);
+      cache.put(event.request, resp.clone()).catch(() => {});
+    }
+    return resp;
+  })());
 });
