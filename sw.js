@@ -1,6 +1,6 @@
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open('va-pay-v3').then(cache => cache.addAll([
+    caches.open('va-pay-v4').then(cache => cache.addAll([
       './',
       './index.html',
       './app.js',
