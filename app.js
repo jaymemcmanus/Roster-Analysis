@@ -25,7 +25,7 @@ window.addEventListener('unhandledrejection', (e) => {
   log(`PROMISE ERROR: ${msg}`);
 });
 
-log("app.js loaded ✅");
+log("app.js loaded ✅ (v13)");
 
 // =================== STATE ===================
 let lastParsedDutyDays = [];
@@ -66,7 +66,6 @@ elPayDate?.addEventListener('change', () => {
     const suggested = toISO(periodStart);
 
     if (!elFortnightStart.value) elFortnightStart.value = suggested;
-
     localStorage.setItem(LS_FORTNIGHT_START, elFortnightStart.value || suggested);
   }
   renderAll();
@@ -191,7 +190,10 @@ function renderAll(silent = false) {
   renderWindows(windows, payRunType);
 
   const withBucket = tagDutiesByWindow(dutyRows, windows);
-  const withFlags = withBucket.map(addFlags);
+
+  // OA is overnight-based: compute OA nights first, then apply flags
+  const oaNights = computeOANights(withBucket);
+  const withFlags = withBucket.map(r => addFlags(r, oaNights));
 
   renderSummary(withFlags, windows, payRunType);
   renderDutiesTable(withFlags);
@@ -277,23 +279,60 @@ function tagDutiesByWindow(duties, windows) {
   });
 }
 
+// =================== OA NIGHTS (OVERNIGHT-AWARE) ===================
+// Parses "OA 12/13 BNE" and maps OA to the FIRST date (12DEC25) so it counts once.
+function computeOANights(rows) {
+  const map = new Map(); // key: startDate (DDMMMYY) -> true
+  for (const r of rows) {
+    const remarkStr = String(r.remarks || "");
+    const m = remarkStr.match(/\bOA\s+(\d{1,2})\/(\d{1,2})\s+([A-Z]{3})\b/i);
+    if (!m) continue;
+
+    const d1 = parseInt(m[1], 10);
+    // const d2 = parseInt(m[2], 10); // currently unused (we don't need the second day)
+    const base = r.startDate; // e.g. 12DEC25 (we assume OA printed on the relevant overnight block)
+    const dtBase = rosterDateToDate(base);
+    if (!dtBase) continue;
+
+    // If the base day doesn't equal d1, we find the date in the same month/year that matches d1
+    // (because OA can appear on multiple lines; we want the first date in the pair)
+    let oaDate = dtBase;
+    if (dtBase.getDate() !== d1) {
+      oaDate = new Date(dtBase.getFullYear(), dtBase.getMonth(), d1);
+      // If that jumps forward too far (end of month), pull back a month
+      if (Math.abs(oaDate - dtBase) > 10 * 24 * 3600 * 1000) {
+        oaDate = new Date(dtBase.getFullYear(), dtBase.getMonth() - 1, d1);
+      }
+    }
+
+    const key = dateToRosterKey(oaDate); // DDMMMYY
+    map.set(key, true);
+  }
+  return map;
+}
+
+function dateToRosterKey(dt) {
+  const dd = String(dt.getDate()).padStart(2, '0');
+  const mmm = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][dt.getMonth()];
+  const yy = String(dt.getFullYear()).slice(-2);
+  return `${dd}${mmm}${yy}`;
+}
+
 // =================== FLAGS (AUDIT MODE) ===================
-function addFlags(d) {
-  const remarks = (d.remarks || "");
+function addFlags(r, oaNightsMap) {
   const flags = [];
 
-  // duty codes
-  const dutyStr = (d.duty || "") + " " + (d.dutyCodesAll || "");
-  const hasFLY = /\bFLY\b/.test(dutyStr) || (d.flightNumber || "").trim().length > 0;
-  const hasLO  = /\bLO\b/.test(dutyStr);
-  const hasTVL = /\bTVL\b/.test(dutyStr);
-  const hasRDO = /\bRDO\b/.test(dutyStr);
+  const dutyCodesAll = r.dutyCodesAll || "";
+  const hasFLY = /\bFLY\b/.test(dutyCodesAll) || (r.flightNumber || "").trim().length > 0;
+  const hasLO  = /\bLO\b/.test(dutyCodesAll);
+  const hasTVL = /\bTVL\b/.test(dutyCodesAll);
+  const hasRDO = /\bRDO\b/.test(dutyCodesAll);
 
   // training detection (RTP*)
-  const hasTRN = /\bRTP\d/i.test(remarks);
+  const hasTRN = /\bRTP\d/i.test(String(r.remarks || ""));
 
-  // own accommodation (OA 12/13 BNE etc)
-  const hasOA = /\bOA\b/.test(remarks);
+  // overnight-based OA
+  const hasOA = oaNightsMap?.has(r.startDate);
 
   if (hasFLY) flags.push("FLY");
   if (hasLO) flags.push("LO");
@@ -302,7 +341,7 @@ function addFlags(d) {
   if (hasTRN) flags.push("TRN");
   if (hasOA) flags.push("OA");
 
-  return { ...d, flags };
+  return { ...r, flags };
 }
 
 // =================== SUMMARY ===================
@@ -398,7 +437,10 @@ function normalizeDutyDaysForTable(days) {
     duty: (d.dutyCodes && d.dutyCodes[0]) || '',
     dutyCodesAll: (d.dutyCodes || []).join(' '),
     flightNumber: (d.flights || []).join(', '),
+
+    // Sectors are cleaned in the parser now; still join as comma list here
     sector: (d.sectors || []).join(', '),
+
     rpt: (d.times || [])[0] || '',
     signOff: (d.times || []).slice(-1)[0] || '',
     hotel: (d.hotels || []).join(', '),
@@ -406,7 +448,7 @@ function normalizeDutyDaysForTable(days) {
   }));
 }
 
-// =================== PDF PARSER (STABLE) ===================
+// =================== PDF PARSER (v13 improvements) ===================
 async function parseRosterPdfToDutyDays(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
@@ -464,36 +506,57 @@ async function parseRosterPdfToDutyDays(file) {
 
     if (!current) continue;
 
+    // Duty codes
     t.match(/\bFLY|TVL|LO|RDO\b/g)?.forEach(c => current.dutyCodes.push(c));
+
+    // Flights
     t.match(/\bVA\s?\d{3,4}\b/g)?.forEach(f => current.flights.push(f.replace(/\s+/g, '')));
 
-    t.match(/\b[A-Z]{3}\s+[A-Z]{3}\b/g)?.forEach(s => {
-      const cleaned = s.replace(/\s+/g, ' ');
-      if (cleaned === "STD STA") return;
-      current.sectors.push(cleaned.replace(/\s+/g, '-'));
-    });
+    // --- Sector extraction FIX ---
+    // Extract true IATA-IATA only, and ignore weekday contamination
+    // We accept both "BNE CNS" and "BNE-CNS" patterns.
+    const rawPairs = [];
+    (t.match(/\b[A-Z]{3}\s+[A-Z]{3}\b/g) || []).forEach(s => rawPairs.push(s));
+    (t.match(/\b[A-Z]{3}-[A-Z]{3}\b/g) || []).forEach(s => rawPairs.push(s.replace('-', ' ')));
 
+    const isDow = (x) => ["SUN","MON","TUE","WED","THU","FRI","SAT"].includes(x);
+    for (const rp of rawPairs) {
+      const parts = rp.trim().split(/\s+/);
+      if (parts.length !== 2) continue;
+      const a = parts[0], b = parts[1];
+      // skip weekday tokens
+      if (isDow(a) || isDow(b)) continue;
+      // basic IATA sanity: 3 letters, not "STD"/"STA"
+      if (a === "STD" || a === "STA" || b === "STD" || b === "STA") continue;
+      current.sectors.push(`${a}-${b}`);
+    }
+
+    // Times (HHMM only)
     (t.match(/\b\d{4}\b/g) || []).forEach(raw => {
       const hh = parseInt(raw.slice(0,2), 10);
       const mm = parseInt(raw.slice(2,4), 10);
       if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) current.times.push(raw);
     });
 
+    // Remarks (training + OA)
     t.match(/\bRTP\d[\w-]*\b/g)?.forEach(r => current.remarks.push(r));
     t.match(/\bOA\s+\d{1,2}\/\d{1,2}\s+[A-Z]{3}\b/g)?.forEach(o => current.remarks.push(o));
 
+    // Hotel codes (rough)
     (t.match(/\b[A-Z]{3}\d\b|\b[A-Z]{4}\b/g) || []).forEach(h => {
       if (/^RTP/i.test(h)) return;
+      if (["SUN","MON","TUE","WED","THU","FRI","SAT"].includes(h)) return;
       if (/^[A-Z]{4}$/.test(h) || /^[A-Z]{3}\d$/.test(h)) current.hotels.push(h);
     });
   }
 
   if (current) dutyDays.push(current);
 
+  // Dedupe & final clean
   dutyDays.forEach(d => {
     d.dutyCodes = uniq(d.dutyCodes);
     d.flights   = uniq(d.flights);
-    d.sectors   = uniq(d.sectors);
+    d.sectors   = uniq(d.sectors.filter(s => /^[A-Z]{3}-[A-Z]{3}$/.test(s)));
     d.times     = uniq(d.times);
     d.hotels    = uniq(d.hotels);
     d.remarks   = uniq(d.remarks);
