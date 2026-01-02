@@ -1,8 +1,8 @@
-const CACHE_NAME = 'va-pay-v9';
+const CACHE_NAME = 'va-pay-v11';
 const CORE_ASSETS = [
   './',
   './index.html',
-  './app.js?v=9',
+  './app.js?v=11',
   './manifest.webmanifest'
 ];
 
@@ -25,7 +25,6 @@ self.addEventListener('fetch', (event) => {
   event.respondWith((async () => {
     const cached = await caches.match(event.request);
     if (cached) return cached;
-
     const resp = await fetch(event.request);
     if (event.request.method === 'GET') {
       const cache = await caches.open(CACHE_NAME);
