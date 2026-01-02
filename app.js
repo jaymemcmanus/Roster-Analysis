@@ -16,9 +16,7 @@ function log(msg) {
 }
 
 // Catch silent JS errors and show them on-screen
-window.addEventListener('error', (e) => {
-  log(`JS ERROR: ${e.message}`);
-});
+window.addEventListener('error', (e) => log(`JS ERROR: ${e.message}`));
 window.addEventListener('unhandledrejection', (e) => {
   const msg = e?.reason?.message || String(e.reason || e);
   log(`PROMISE ERROR: ${msg}`);
@@ -45,7 +43,6 @@ clearBtn?.addEventListener('click', () => {
   elDuties.innerHTML = '';
 });
 
-// Parse when the textarea changes (useful for manual paste)
 elInput?.addEventListener('input', () => parseAndRender(true));
 
 // =================== PDF.JS SETUP ===================
@@ -58,27 +55,16 @@ if (window.pdfjsLib) {
 }
 
 // =================== FILE PICKER HANDLERS ===================
-// iPad Safari sometimes fails to fire addEventListener('change').
-// We provide BOTH: inline onchange (from index.html) and standard change listener.
-
-// Inline handler called from index.html onchange="window.__onPdfSelected(this)"
 window.__onPdfSelected = function (input) {
   log("Inline onchange fired (Safari fallback)");
   const file = input?.files?.[0];
-  if (!file) {
-    log("No file in inline handler");
-    return;
-  }
+  if (!file) return log("No file in inline handler");
   handlePdfFile(file);
 };
 
-// Standard handler (for normal browsers)
 pdfFile?.addEventListener('change', (e) => {
   const file = e.target.files?.[0];
-  if (!file) {
-    log("No file selected (standard handler)");
-    return;
-  }
+  if (!file) return log("No file selected (standard handler)");
   log("Standard change fired");
   handlePdfFile(file);
 });
@@ -86,10 +72,7 @@ pdfFile?.addEventListener('change', (e) => {
 async function handlePdfFile(file) {
   try {
     log(`File selected: ${file.name} (${Math.round(file.size / 1024)} KB)`);
-
-    if (!window.pdfjsLib) {
-      throw new Error("PDF.js not loaded (pdfjsLib is undefined).");
-    }
+    if (!window.pdfjsLib) throw new Error("PDF.js not loaded (pdfjsLib undefined)");
 
     log("Starting PDF parse…");
     const dutyDays = await parseRosterPdfToDutyDays(file);
@@ -109,7 +92,6 @@ async function handlePdfFile(file) {
     log(`PDF import failed: ${msg}`);
     alert(`PDF import failed:\n${msg}`);
   } finally {
-    // Allow selecting the same file again
     if (pdfFile) pdfFile.value = '';
   }
 }
@@ -134,7 +116,6 @@ function parseAndRender(silent = false) {
   renderDutiesTable(duties);
 }
 
-// Turn duty-day objects into a flat structure for the table
 function normalizeDutyDaysForTable(days) {
   return (days || []).map(d => ({
     startDate: d.startDate || '',
@@ -148,16 +129,19 @@ function normalizeDutyDaysForTable(days) {
   }));
 }
 
-// =================== SUMMARY (PLACEHOLDER) ===================
+// =================== SUMMARY (SANITY) ===================
 function renderSummary(duties) {
   const counts = {};
   for (const d of duties) counts[d.duty] = (counts[d.duty] || 0) + 1;
 
+  const uniqueDates = uniq(duties.map(d => d.startDate)).length;
+
   elSummary.innerHTML = `
     <table>
       <tr><th>Metric</th><th>Value</th></tr>
-      <tr><td>Total Duty-days</td><td>${duties.length}</td></tr>
-      <tr><td>Duty Mix</td><td class="mono">${escapeHtml(JSON.stringify(counts))}</td></tr>
+      <tr><td>Duty blocks (rows)</td><td>${duties.length}</td></tr>
+      <tr><td>Unique dates</td><td>${uniqueDates}</td></tr>
+      <tr><td>Duty mix</td><td class="mono">${escapeHtml(JSON.stringify(counts))}</td></tr>
     </table>
   `;
 }
@@ -173,7 +157,7 @@ function renderDutiesTable(duties) {
     <table>
       <tr>
         <th>Date</th><th>Duty</th><th>Flights</th><th>Sectors</th>
-        <th>Rpt</th><th>Sign Off</th><th>Hotel</th><th>Remarks</th>
+        <th>Rpt</th><th>Sign Off</th><th>Hotels</th><th>Remarks</th>
       </tr>
   `;
 
@@ -196,8 +180,7 @@ function renderDutiesTable(duties) {
   elDuties.innerHTML = html;
 }
 
-// =================== PDF PARSER ===================
-// Strategy: extract text lines, then group into "duty-days" by Start Date tokens (e.g., 07DEC25).
+// =================== PDF PARSER (IMPROVED) ===================
 async function parseRosterPdfToDutyDays(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
@@ -215,7 +198,6 @@ async function parseRosterPdfToDutyDays(file) {
       })
       .filter(i => i.str);
 
-    // Group items into "lines" by y (rounded)
     const buckets = {};
     for (const it of items) {
       const key = `${p}-${Math.round(it.y * 2) / 2}`; // 0.5 resolution
@@ -229,24 +211,33 @@ async function parseRosterPdfToDutyDays(file) {
     }
   }
 
-  // Sort: page asc, y desc
   lines.sort((a, b) => a.page - b.page || b.y - a.y);
 
+  // New-day rule: date token + weekday token near the start of the line
   const dateRe = /\b\d{2}[A-Z]{3}\d{2}\b/;
+  const dowRe  = /\b(SUN|MON|TUE|WED|THU|FRI|SAT)\b/;
+
   const dutyDays = [];
   let current = null;
 
   for (const ln of lines) {
-    // Skip obvious non-roster sections
-    if (/Roster Report|Hotel Codes|Training Codes|Duty Codes/i.test(ln.text)) continue;
+    const t = ln.text;
 
-    const m = ln.text.match(dateRe);
-    const isNewDay = m && ln.text.indexOf(m[0]) < 6; // date near start
+    // Skip obvious non-roster lines/legends/headers
+    if (/Roster Report|Hotel Codes|Training Codes|Duty Codes/i.test(t)) continue;
+    if (/\bSTD\b.*\bSTA\b/i.test(t)) continue; // header line
+    if (/Start Date|Pairing Duty|Flt Time|Duty Time|Sign Off/i.test(t)) continue;
+
+    const dm = t.match(dateRe);
+    const dow = t.match(dowRe);
+    const dateNearStart = dm && t.indexOf(dm[0]) <= 6;
+
+    const isNewDay = Boolean(dateNearStart && dow && t.indexOf(dow[0]) < 25);
 
     if (isNewDay) {
       if (current) dutyDays.push(current);
       current = {
-        startDate: m[0],
+        startDate: dm[0],
         dutyCodes: [],
         flights: [],
         sectors: [],
@@ -258,29 +249,43 @@ async function parseRosterPdfToDutyDays(file) {
 
     if (!current) continue;
 
-    // Collect duty codes
-    ln.text.match(/\bFLY|TVL|LO|RDO\b/g)?.forEach(c => current.dutyCodes.push(c));
+    // Duty codes
+    t.match(/\bFLY|TVL|LO|RDO\b/g)?.forEach(c => current.dutyCodes.push(c));
 
     // Flights VA0916 / VA 0916
-    ln.text.match(/\bVA\s?\d{3,4}\b/g)?.forEach(f => current.flights.push(f.replace(/\s+/g, '')));
+    t.match(/\bVA\s?\d{3,4}\b/g)?.forEach(f => current.flights.push(f.replace(/\s+/g, '')));
 
-    // Sectors like "BNE SYD"
-    ln.text.match(/\b[A-Z]{3}\s+[A-Z]{3}\b/g)?.forEach(s => current.sectors.push(s.replace(/\s+/g, '-')));
+    // Sectors: two IATA codes adjacent, but NOT "STD STA"
+    t.match(/\b[A-Z]{3}\s+[A-Z]{3}\b/g)?.forEach(s => {
+      const cleaned = s.replace(/\s+/g, ' ');
+      if (cleaned === "STD STA") return;
+      current.sectors.push(cleaned.replace(/\s+/g, '-'));
+    });
 
-    // Times (0705, 1154)
-    ln.text.match(/\b\d{4}\b/g)?.forEach(t => current.times.push(t));
+    // Times: accept only valid HHMM (0000–2359)
+    (t.match(/\b\d{4}\b/g) || []).forEach(raw => {
+      const hh = parseInt(raw.slice(0,2), 10);
+      const mm = parseInt(raw.slice(2,4), 10);
+      if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) current.times.push(raw);
+    });
 
-    // Hotel-ish codes (kept broad for now)
-    ln.text.match(/\b[A-Z]{3}\d\b|\b[A-Z]{4}\b/g)?.forEach(h => current.hotels.push(h));
+    // Training codes (keep as remarks)
+    t.match(/\bRTP\d[\w-]*\b/g)?.forEach(r => current.remarks.push(r));
 
-    // Training/remarks
-    ln.text.match(/\bRTP\d[\w-]*\b/g)?.forEach(r => current.remarks.push(r));
-    ln.text.match(/\bOA\s+\d{1,2}\/\d{1,2}\s+[A-Z]{3}\b/g)?.forEach(o => current.remarks.push(o));
+    // OA remark
+    t.match(/\bOA\s+\d{1,2}\/\d{1,2}\s+[A-Z]{3}\b/g)?.forEach(o => current.remarks.push(o));
+
+    // Hotels: allow patterns like BNEO, MEL1, CBR5 (exclude RTP*)
+    (t.match(/\b[A-Z]{3}\d\b|\b[A-Z]{4}\b/g) || []).forEach(h => {
+      if (/^RTP/i.test(h)) return;
+      // Keep likely hotel tokens (BNEO, MEL1, CBR5 etc)
+      if (/^[A-Z]{4}$/.test(h) || /^[A-Z]{3}\d$/.test(h)) current.hotels.push(h);
+    });
   }
 
   if (current) dutyDays.push(current);
 
-  // Deduplicate arrays
+  // Deduplicate
   dutyDays.forEach(d => {
     d.dutyCodes = uniq(d.dutyCodes);
     d.flights   = uniq(d.flights);
@@ -297,6 +302,7 @@ async function parseRosterPdfToDutyDays(file) {
 function uniq(arr) {
   return [...new Set((arr || []).filter(Boolean))];
 }
+
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"]/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])
