@@ -27,7 +27,7 @@
     <div style="display:flex;justify-content:space-between;align-items:center;">
       <div>
         <div style="font-weight:800;">VA Pay Calculator</div>
-        <div class="muted" style="font-size:12px;">PWA + Safari roster capture (clipboard)</div>
+        <div class="muted" style="font-size:12px;">PWA + Printable roster PDF import</div>
       </div>
       <button class="secondary" id="installBtn" style="display:none;">Install</button>
     </div>
@@ -35,26 +35,34 @@
 
   <main>
     <div class="card">
-      <h3 style="margin:0 0 8px 0;">1) Capture roster from Crew Connection</h3>
+      <h3 style="margin:0 0 8px 0;">1) Import roster</h3>
       <ol class="muted" style="margin-top:6px;">
-        <li>Open Crew Connection → Roster Report → set dates → Query</li>
-        <li>Tap your Safari bookmark <b>Roster Capture</b> (bookmarklet)</li>
-        <li>It copies roster JSON to clipboard</li>
-        <li>Come back here and tap <b>Paste</b></li>
+        <li>In Crew Connection (Safari): Roster Report → set dates → Query</li>
+        <li>Tap Print → open the printable view → Share → Save to Files as PDF</li>
+        <li>Tap <b>Import Printable Roster (PDF)</b> below and select the saved PDF</li>
       </ol>
+
       <div class="row">
         <button id="pasteBtn">Paste roster JSON</button>
         <button class="secondary" id="clearBtn">Clear</button>
       </div>
+
+      <div class="row" style="margin-top:10px;">
+        <button id="importPdfBtn" class="secondary">Import Printable Roster (PDF)</button>
+        <input id="pdfFile" type="file" accept="application/pdf" style="display:none;" />
+      </div>
+
       <div style="margin-top:10px;">
-        <textarea id="input" placeholder="Roster JSON will appear here..."></textarea>
+        <textarea id="input" placeholder="Roster JSON (debug) will appear here after import, or you can paste JSON manually..."></textarea>
         <div class="muted mono" id="status" style="margin-top:6px;"></div>
       </div>
     </div>
 
     <div class="card">
       <h3 style="margin:0 0 8px 0;">2) Pay summary (v1)</h3>
-      <div class="muted">This version proves the pipeline. Next we’ll implement full EBA rules (ODTA/DTA windows, own accom, WDO/OT buckets, credit trigger, etc.).</div>
+      <div class="muted">
+        This version proves the pipeline. Next we’ll implement full EBA rules (ODTA/DTA windows, own accom, WDO/OT buckets, credit trigger, etc.).
+      </div>
       <div id="summary" style="margin-top:10px;"></div>
     </div>
 
@@ -64,7 +72,12 @@
     </div>
   </main>
 
+  <!-- PDF.js (for importing printable roster PDFs) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+  <!-- App logic -->
   <script src="app.js"></script>
+
   <script>
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
   </script>
