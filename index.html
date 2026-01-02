@@ -8,25 +8,39 @@
   <meta name="theme-color" content="#0b1220">
   <style>
     body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background:#0b1220; color:#e6e9ef; }
-    header { padding:16px; background:#101a33; position: sticky; top:0; }
-    main { padding:16px; max-width: 900px; margin: 0 auto; }
+    header { padding:16px; background:#101a33; position: sticky; top:0; z-index:10; }
+    main { padding:16px; max-width: 980px; margin: 0 auto; }
     .card { background:#121c38; border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:14px; margin: 12px 0; }
-    button, .btnlike { border:0; border-radius:12px; padding:12px 14px; background:#2b67f6; color:white; font-weight:600; }
+    button, .btnlike { border:0; border-radius:12px; padding:12px 14px; background:#2b67f6; color:white; font-weight:800; }
     .secondary { background:#2a355b; }
     textarea { width:100%; min-height:160px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:#0c1430; color:#e6e9ef; padding:12px; }
     table { width:100%; border-collapse: collapse; }
     td, th { padding:8px; border-bottom:1px solid rgba(255,255,255,.08); text-align:left; vertical-align:top; }
-    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
     .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
     .muted { color: rgba(230,233,239,.7); }
     .btnlike { display:inline-block; text-align:center; cursor:pointer; }
+    input, select {
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,.12);
+      background:#0c1430;
+      color:#e6e9ef;
+      padding:12px;
+      font-weight:700;
+    }
+    label { font-weight:800; }
+    .pill {
+      display:inline-block; padding:4px 10px; border-radius:999px;
+      border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.06);
+      font-size:12px; font-weight:900;
+    }
   </style>
 </head>
 <body>
   <header>
     <div style="display:flex;justify-content:space-between;align-items:center;">
       <div>
-        <div style="font-weight:800;">VA Pay Calculator</div>
+        <div style="font-weight:950;">VA Pay Calculator</div>
         <div class="muted" style="font-size:12px;">PWA + Printable roster PDF import</div>
       </div>
       <button class="secondary" id="installBtn" style="display:none;">Install</button>
@@ -67,15 +81,52 @@
     </div>
 
     <div class="card">
-      <h3 style="margin:0 0 8px 0;">2) Pay summary (v1)</h3>
-      <div class="muted">
-        Parser sanity first, then we’ll implement EBA rules (ODTA/DTA, own accom, WDO/OT, etc.).
+      <h3 style="margin:0 0 8px 0;">2) Fortnight & pay run</h3>
+
+      <div class="row" style="margin-top:8px;">
+        <div style="flex:1 1 260px;">
+          <label for="fortnightStart">Fortnight start date (primary)</label><br/>
+          <input id="fortnightStart" type="date" />
+          <div class="muted" style="margin-top:6px;">
+            This drives the CURRENT (standard pay) window.
+          </div>
+        </div>
+
+        <div style="flex:1 1 260px;">
+          <label for="payDate">Pay date (helper)</label><br/>
+          <input id="payDate" type="date" />
+          <div class="muted" style="margin-top:6px;">
+            Optional. If entered, we can suggest the fortnight start using your observed pattern.
+          </div>
+        </div>
+
+        <div style="flex:1 1 320px;">
+          <label for="payRunType">This pay run includes extras for</label><br/>
+          <select id="payRunType">
+            <option value="allowances">Allowances from previous fortnight</option>
+            <option value="wdo_ot">WDO / Overtime from previous fortnight</option>
+          </select>
+          <div class="muted" style="margin-top:6px;">
+            Standard pay always applies to CURRENT window.
+          </div>
+        </div>
       </div>
+
+      <div id="windows" style="margin-top:12px;"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px 0;">3) Summary</h3>
+      <div class="muted">Timing summary only (no EBA maths yet).</div>
       <div id="summary" style="margin-top:10px;"></div>
     </div>
 
     <div class="card">
-      <h3 style="margin:0 0 8px 0;">3) Extracted duties</h3>
+      <h3 style="margin:0 0 8px 0;">4) Extracted duties</h3>
+      <div class="muted" style="margin-bottom:10px;">
+        <span class="pill">CURRENT</span> = duties inside selected fortnight (standard pay period).&nbsp;&nbsp;
+        <span class="pill">PREV</span> = duties inside previous fortnight (extras posting period).
+      </div>
       <div id="duties"></div>
     </div>
   </main>
@@ -83,8 +134,8 @@
   <!-- PDF.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 
-  <!-- App logic (cache-busted) -->
-  <script src="app.js?v=9"></script>
+  <!-- App logic -->
+  <script src="app.js?v=11"></script>
 
   <script>
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
