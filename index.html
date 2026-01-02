@@ -47,10 +47,21 @@
         <button class="secondary" id="clearBtn">Clear</button>
       </div>
 
-      <div class="row" style="margin-top:10px;">
-        <button id="importPdfBtn" class="secondary">Import Printable Roster (PDF)</button>
-        <input id="pdfFile" type="file" accept="application/pdf" style="display:none;" />
-      </div>
+   <div class="row" style="margin-top:10px;">
+  <label class="secondary" style="
+    display:inline-block;
+    padding:12px 14px;
+    border-radius:12px;
+    background:#2a355b;
+    color:white;
+    font-weight:600;
+    text-align:center;
+    cursor:pointer;
+  ">
+    Import Printable Roster (PDF)
+    <input id="pdfFile" type="file" accept="application/pdf" style="display:none;" />
+  </label>
+</div>
 
       <div style="margin-top:10px;">
         <textarea id="input" placeholder="Roster JSON (debug) will appear here after import, or you can paste JSON manually..."></textarea>
