@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>VA Pay Calculator</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#0b1220">
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background:#0b1220; color:#e6e9ef; }
+    header { padding:16px; background:#101a33; position: sticky; top:0; }
+    main { padding:16px; max-width: 900px; margin: 0 auto; }
+    .card { background:#121c38; border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:14px; margin: 12px 0; }
+    button { border:0; border-radius:12px; padding:12px 14px; background:#2b67f6; color:white; font-weight:600; }
+    button.secondary { background:#2a355b; }
+    textarea { width:100%; min-height:140px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:#0c1430; color:#e6e9ef; padding:12px; }
+    table { width:100%; border-collapse: collapse; }
+    td, th { padding:8px; border-bottom:1px solid rgba(255,255,255,.08); text-align:left; vertical-align:top; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; }
+    .row > * { flex: 1 1 220px; }
+    .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+    .muted { color: rgba(230,233,239,.7); }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-weight:800;">VA Pay Calculator</div>
+        <div class="muted" style="font-size:12px;">PWA + Safari roster capture (clipboard)</div>
+      </div>
+      <button class="secondary" id="installBtn" style="display:none;">Install</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="card">
+      <h3 style="margin:0 0 8px 0;">1) Capture roster from Crew Connection</h3>
+      <ol class="muted" style="margin-top:6px;">
+        <li>Open Crew Connection → Roster Report → set dates → Query</li>
+        <li>Tap your Safari bookmark <b>Roster Capture</b> (bookmarklet)</li>
+        <li>It copies roster JSON to clipboard</li>
+        <li>Come back here and tap <b>Paste</b></li>
+      </ol>
+      <div class="row">
+        <button id="pasteBtn">Paste roster JSON</button>
+        <button class="secondary" id="clearBtn">Clear</button>
+      </div>
+      <div style="margin-top:10px;">
+        <textarea id="input" placeholder="Roster JSON will appear here..."></textarea>
+        <div class="muted mono" id="status" style="margin-top:6px;"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px 0;">2) Pay summary (v1)</h3>
+      <div class="muted">This version proves the pipeline. Next we’ll implement full EBA rules (ODTA/DTA windows, own accom, WDO/OT buckets, credit trigger, etc.).</div>
+      <div id="summary" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px 0;">3) Extracted duties</h3>
+      <div id="duties"></div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
+  </script>
+</body>
+</html>
