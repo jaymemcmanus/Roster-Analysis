@@ -57,16 +57,16 @@ elPayRunType?.addEventListener('change', () => {
 
 elPayDate?.addEventListener('change', () => {
   localStorage.setItem(LS_PAY_DATE, elPayDate.value || "");
-  // Suggest fortnight start based on observed pattern:
-  // PeriodEnd = PayDate - 4 days; PeriodStart = PeriodEnd - 13 days
   const pd = elPayDate.value;
   if (pd) {
+    // Observed pattern: PeriodEnd = PayDate - 4 days; PeriodStart = PeriodEnd - 13
     const pay = isoToDate(pd);
     const periodEnd = addDays(pay, -4);
     const periodStart = addDays(periodEnd, -13);
     const suggested = toISO(periodStart);
-    // Only auto-set if fortnightStart is empty or user wants it aligned
+
     if (!elFortnightStart.value) elFortnightStart.value = suggested;
+
     localStorage.setItem(LS_FORTNIGHT_START, elFortnightStart.value || suggested);
   }
   renderAll();
@@ -134,7 +134,6 @@ async function handlePdfFile(file) {
 
     lastParsedDutyDays = dutyDays;
 
-    // Write debug JSON
     elInput.value = JSON.stringify({
       source: "pdf",
       capturedAt: new Date().toISOString(),
@@ -142,9 +141,8 @@ async function handlePdfFile(file) {
       duties: dutyDays
     }, null, 2);
 
-    // Auto-suggest fortnight start from roster date range if empty
+    // Auto-fill fortnight start from earliest duty date if empty
     if (!elFortnightStart.value && dutyDays.length) {
-      // Choose earliest date in duties list
       const dates = dutyDays.map(d => rosterDateToDate(d.startDate)).filter(Boolean).sort((a,b)=>a-b);
       if (dates.length) {
         elFortnightStart.value = toISO(dates[0]);
@@ -177,7 +175,7 @@ function parseInputJson(silent = false) {
 
   if (Array.isArray(data?.duties)) {
     lastParsedDutyDays = data.duties;
-    log(`Loaded duties from JSON | Duties=${lastParsedDutyDays.length}`);
+    if (!silent) log(`Loaded duties from JSON | Duties=${lastParsedDutyDays.length}`);
   }
 }
 
@@ -190,12 +188,13 @@ function renderAll(silent = false) {
   const payRunType = elPayRunType?.value || "allowances";
 
   const windows = computeWindows(fortnightStart, payDateISO);
-
   renderWindows(windows, payRunType);
 
-  const tagged = tagDutiesByWindow(dutyRows, windows);
-  renderSummary(tagged, windows, payRunType);
-  renderDutiesTable(tagged);
+  const withBucket = tagDutiesByWindow(dutyRows, windows);
+  const withFlags = withBucket.map(addFlags);
+
+  renderSummary(withFlags, windows, payRunType);
+  renderDutiesTable(withFlags);
 
   if (!silent) log(`Rendered | Duties=${dutyRows.length}`);
 }
@@ -211,21 +210,17 @@ function computeWindows(fortnightStartISO, payDateISO) {
   const prevStart = addDays(currentStart, -14);
   const prevEnd = addDays(currentStart, -1);
 
-  // Helper: infer paydate from start using observed offset (end +4)
   const inferredPayDate = addDays(currentEnd, 4);
 
-  // If user entered a pay date, show delta vs inferred
-  let payDate = payDateISO ? isoToDate(payDateISO) : null;
+  let enteredPayDate = payDateISO ? isoToDate(payDateISO) : null;
   let payDeltaDays = null;
-  if (payDate) {
-    payDeltaDays = Math.round((payDate - inferredPayDate) / (24*3600*1000));
-  }
+  if (enteredPayDate) payDeltaDays = Math.round((enteredPayDate - inferredPayDate) / (24*3600*1000));
 
   return {
     current: { start: currentStart, end: currentEnd },
     prev: { start: prevStart, end: prevEnd },
     inferredPayDate,
-    enteredPayDate: payDate,
+    enteredPayDate,
     payDeltaDays
   };
 }
@@ -245,8 +240,8 @@ function renderWindows(windows, payRunType) {
 
   let payLine = `<div class="muted">Inferred pay date (from start): <b>${fmtDate(inferred)}</b> (end + 4 days)</div>`;
   if (entered) {
-    const delta = windows.payDeltaDays;
-    const deltaTxt = delta === 0 ? "matches inferred" : (delta > 0 ? `is ${delta} day(s) later` : `is ${Math.abs(delta)} day(s) earlier`);
+    const d = windows.payDeltaDays;
+    const deltaTxt = d === 0 ? "matches inferred" : (d > 0 ? `is ${d} day(s) later` : `is ${Math.abs(d)} day(s) earlier`);
     payLine = `<div class="muted">Entered pay date: <b>${fmtDate(entered)}</b> — ${deltaTxt} than inferred (<b>${fmtDate(inferred)}</b>)</div>`;
   }
 
@@ -268,7 +263,7 @@ function renderWindows(windows, payRunType) {
   `;
 }
 
-// =================== DUTY TAGGING & SUMMARY ===================
+// =================== BUCKET TAGGING ===================
 function tagDutiesByWindow(duties, windows) {
   if (!windows) return duties.map(d => ({ ...d, bucket: "" }));
 
@@ -282,67 +277,112 @@ function tagDutiesByWindow(duties, windows) {
   });
 }
 
-function renderSummary(taggedDuties, windows, payRunType) {
+// =================== FLAGS (AUDIT MODE) ===================
+function addFlags(d) {
+  const remarks = (d.remarks || "");
+  const flags = [];
+
+  // duty codes
+  const dutyStr = (d.duty || "") + " " + (d.dutyCodesAll || "");
+  const hasFLY = /\bFLY\b/.test(dutyStr) || (d.flightNumber || "").trim().length > 0;
+  const hasLO  = /\bLO\b/.test(dutyStr);
+  const hasTVL = /\bTVL\b/.test(dutyStr);
+  const hasRDO = /\bRDO\b/.test(dutyStr);
+
+  // training detection (RTP*)
+  const hasTRN = /\bRTP\d/i.test(remarks);
+
+  // own accommodation (OA 12/13 BNE etc)
+  const hasOA = /\bOA\b/.test(remarks);
+
+  if (hasFLY) flags.push("FLY");
+  if (hasLO) flags.push("LO");
+  if (hasTVL) flags.push("TVL");
+  if (hasRDO) flags.push("RDO");
+  if (hasTRN) flags.push("TRN");
+  if (hasOA) flags.push("OA");
+
+  return { ...d, flags };
+}
+
+// =================== SUMMARY ===================
+function renderSummary(rows, windows, payRunType) {
   if (!windows) {
     elSummary.innerHTML = `<div class="muted">Pick a fortnight start date to see counts by posting window.</div>`;
     return;
   }
 
-  const current = taggedDuties.filter(d => d.bucket === "CURRENT");
-  const prev = taggedDuties.filter(d => d.bucket === "PREV");
+  const cur = rows.filter(r => r.bucket === "CURRENT");
+  const prev = rows.filter(r => r.bucket === "PREV");
 
-  const mix = (arr) => {
+  const dutyMix = (arr) => {
     const m = {};
-    for (const d of arr) m[d.duty] = (m[d.duty] || 0) + 1;
+    for (const r of arr) {
+      const key = r.duty || "(blank)";
+      m[key] = (m[key] || 0) + 1;
+    }
     return m;
+  };
+
+  const flagCounts = (arr) => {
+    const c = {};
+    for (const r of arr) {
+      for (const f of (r.flags || [])) c[f] = (c[f] || 0) + 1;
+    }
+    return c;
   };
 
   const extrasLabel = payRunType === "allowances" ? "Allowances (prev)" : "WDO/OT (prev)";
 
   elSummary.innerHTML = `
     <table>
-      <tr><th>Bucket</th><th>Duty-days</th><th>Duty mix</th></tr>
+      <tr><th>Bucket</th><th>Duty-days</th><th>Duty mix</th><th>Flag counts</th></tr>
       <tr>
-        <td><span class="pill">CURRENT</span> Standard period</td>
-        <td>${current.length}</td>
-        <td class="mono">${escapeHtml(JSON.stringify(mix(current)))}</td>
+        <td><span class="pill">CURRENT</span></td>
+        <td>${cur.length}</td>
+        <td class="mono">${escapeHtml(JSON.stringify(dutyMix(cur)))}</td>
+        <td class="mono">${escapeHtml(JSON.stringify(flagCounts(cur)))}</td>
       </tr>
       <tr>
         <td><span class="pill">PREV</span> ${escapeHtml(extrasLabel)}</td>
         <td>${prev.length}</td>
-        <td class="mono">${escapeHtml(JSON.stringify(mix(prev)))}</td>
+        <td class="mono">${escapeHtml(JSON.stringify(dutyMix(prev)))}</td>
+        <td class="mono">${escapeHtml(JSON.stringify(flagCounts(prev)))}</td>
       </tr>
     </table>
   `;
 }
 
 // =================== DUTIES TABLE ===================
-function renderDutiesTable(duties) {
-  if (!duties.length) {
+function renderDutiesTable(rows) {
+  if (!rows.length) {
     elDuties.innerHTML = '<div class="muted">No duties detected.</div>';
     return;
   }
 
+  const flagHtml = (flags) => (flags || []).map(f => `<span class="flag">${escapeHtml(f)}</span>`).join(' ');
+
   let html = `
     <table>
       <tr>
-        <th>Bucket</th><th>Date</th><th>Duty</th><th>Flights</th><th>Sectors</th>
+        <th>Bucket</th><th>Date</th><th>Flags</th><th>Duty</th><th>Flights</th><th>Sectors</th>
         <th>Rpt</th><th>Sign Off</th><th>Hotels</th><th>Remarks</th>
       </tr>
   `;
 
-  for (const d of duties) {
+  for (const r of rows) {
     html += `
       <tr>
-        <td>${d.bucket ? `<span class="pill">${escapeHtml(d.bucket)}</span>` : ''}</td>
-        <td>${escapeHtml(d.startDate)}</td>
-        <td>${escapeHtml(d.duty)}</td>
-        <td>${escapeHtml(d.flightNumber)}</td>
-        <td>${escapeHtml(d.sector)}</td>
-        <td>${escapeHtml(d.rpt)}</td>
-        <td>${escapeHtml(d.signOff)}</td>
-        <td>${escapeHtml(d.hotel)}</td>
-        <td>${escapeHtml(d.remarks)}</td>
+        <td>${r.bucket ? `<span class="pill">${escapeHtml(r.bucket)}</span>` : ''}</td>
+        <td>${escapeHtml(r.startDate)}</td>
+        <td>${flagHtml(r.flags)}</td>
+        <td>${escapeHtml(r.duty)}</td>
+        <td>${escapeHtml(r.flightNumber)}</td>
+        <td>${escapeHtml(r.sector)}</td>
+        <td>${escapeHtml(r.rpt)}</td>
+        <td>${escapeHtml(r.signOff)}</td>
+        <td>${escapeHtml(r.hotel)}</td>
+        <td>${escapeHtml(r.remarks)}</td>
       </tr>
     `;
   }
@@ -356,6 +396,7 @@ function normalizeDutyDaysForTable(days) {
   return (days || []).map(d => ({
     startDate: d.startDate || '',
     duty: (d.dutyCodes && d.dutyCodes[0]) || '',
+    dutyCodesAll: (d.dutyCodes || []).join(' '),
     flightNumber: (d.flights || []).join(', '),
     sector: (d.sectors || []).join(', '),
     rpt: (d.times || [])[0] || '',
@@ -365,7 +406,7 @@ function normalizeDutyDaysForTable(days) {
   }));
 }
 
-// =================== PDF PARSER (STABLE v9) ===================
+// =================== PDF PARSER (STABLE) ===================
 async function parseRosterPdfToDutyDays(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
@@ -463,7 +504,6 @@ async function parseRosterPdfToDutyDays(file) {
 
 // =================== DATE HELPERS ===================
 function isoToDate(iso) {
-  // Date-only in local time (safe for our day math)
   const [y,m,d] = iso.split('-').map(n => parseInt(n,10));
   return new Date(y, m-1, d);
 }
@@ -493,8 +533,7 @@ function rosterDateToDate(ddmmmyy) {
   const months = { JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11 };
   const mm = months[mmm];
   if (mm === undefined) return null;
-  const fullYear = 2000 + yy;
-  return new Date(fullYear, mm, dd);
+  return new Date(2000 + yy, mm, dd);
 }
 
 // =================== MISC HELPERS ===================
