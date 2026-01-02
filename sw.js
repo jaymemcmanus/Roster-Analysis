@@ -1,8 +1,8 @@
-const CACHE_NAME = 'va-pay-v12';
+const CACHE_NAME = 'va-pay-v13';
 const CORE_ASSETS = [
   './',
   './index.html',
-  './app.js?v=12',
+  './app.js?v=13',
   './manifest.webmanifest'
 ];
 
