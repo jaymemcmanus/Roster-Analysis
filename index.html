@@ -45,6 +45,7 @@
       font-weight:900;
       letter-spacing:.2px;
     }
+    details summary { cursor:pointer; font-weight:800; }
   </style>
 </head>
 <body>
@@ -88,6 +89,11 @@
       <div style="margin-top:10px;">
         <textarea id="input" placeholder="JSON (debug) will appear here after import, or you can paste JSON manually..."></textarea>
         <div class="muted mono" id="status" style="margin-top:6px;"></div>
+
+        <details style="margin-top:10px;">
+          <summary class="muted">Debug (PDF columns / detection)</summary>
+          <pre id="debug" class="mono muted" style="white-space:pre-wrap;"></pre>
+        </details>
       </div>
     </div>
 
@@ -142,12 +148,8 @@
     </div>
   </main>
 
-  <!-- PDF.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-
-  <!-- App logic -->
-  <script src="app.js?v=14"></script>
-
+  <script src="app.js?v=15"></script>
   <script>
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
   </script>
