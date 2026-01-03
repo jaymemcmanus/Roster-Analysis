@@ -1,4 +1,3 @@
-// =================== ELEMENT REFERENCES ===================
 const elInput   = document.getElementById('input');
 const elStatus  = document.getElementById('status');
 const elWindows = document.getElementById('windows');
@@ -14,7 +13,6 @@ const elFortnightStart = document.getElementById('fortnightStart');
 const elPayDate = document.getElementById('payDate');
 const elPayRunType = document.getElementById('payRunType');
 
-// ======= LOGGER =======
 function log(msg) {
   const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
   console.log(line);
@@ -30,17 +28,14 @@ window.addEventListener('unhandledrejection', (e) => {
   log(`PROMISE ERROR: ${msg}`);
 });
 
-log("app.js loaded ✅ (v15)");
+log("app.js loaded ✅ (v16)");
 
-// =================== STATE ===================
 let lastParsedDutyDays = [];
 
-// =================== STORAGE KEYS ===================
 const LS_FORTNIGHT_START = "va_fortnight_start";
 const LS_PAY_DATE = "va_pay_date";
 const LS_PAYRUN_TYPE = "va_payrun_type";
 
-// Restore
 (function restoreUiState() {
   const fs = localStorage.getItem(LS_FORTNIGHT_START);
   const pd = localStorage.getItem(LS_PAY_DATE);
@@ -54,29 +49,24 @@ elFortnightStart?.addEventListener('change', () => {
   localStorage.setItem(LS_FORTNIGHT_START, elFortnightStart.value || "");
   renderAll();
 });
-
 elPayRunType?.addEventListener('change', () => {
   localStorage.setItem(LS_PAYRUN_TYPE, elPayRunType.value || "allowances");
   renderAll();
 });
-
 elPayDate?.addEventListener('change', () => {
   localStorage.setItem(LS_PAY_DATE, elPayDate.value || "");
   const pd = elPayDate.value;
   if (pd) {
-    // Observed pattern: PeriodEnd = PayDate - 4 days; PeriodStart = PeriodEnd - 13
     const pay = isoToDate(pd);
     const periodEnd = addDays(pay, -4);
     const periodStart = addDays(periodEnd, -13);
     const suggested = toISO(periodStart);
-
     if (!elFortnightStart.value) elFortnightStart.value = suggested;
     localStorage.setItem(LS_FORTNIGHT_START, elFortnightStart.value || suggested);
   }
   renderAll();
 });
 
-// =================== BUTTONS ===================
 pasteBtn?.addEventListener('click', async () => {
   log("Paste button clicked");
   try {
@@ -104,7 +94,6 @@ elInput?.addEventListener('input', () => {
   renderAll(true);
 });
 
-// =================== PDF.JS SETUP ===================
 if (window.pdfjsLib) {
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
@@ -113,7 +102,6 @@ if (window.pdfjsLib) {
   log("pdfjsLib NOT found ❌ (PDF.js script didn’t load)");
 }
 
-// =================== FILE PICKER ===================
 window.__onPdfSelected = function (input) {
   log("Inline onchange fired (Safari fallback)");
   const file = input?.files?.[0];
@@ -146,7 +134,6 @@ async function handlePdfFile(file) {
       duties: dutyDays
     }, null, 2);
 
-    // Auto-fill fortnight start from earliest duty date if empty
     if (!elFortnightStart.value && dutyDays.length) {
       const dates = dutyDays.map(d => rosterDateToDate(d.startDate)).filter(Boolean).sort((a,b)=>a-b);
       if (dates.length) {
@@ -165,7 +152,6 @@ async function handlePdfFile(file) {
   }
 }
 
-// =================== INPUT JSON ===================
 function parseInputJson(silent = false) {
   const txt = (elInput?.value || '').trim();
   if (!txt) return;
@@ -180,7 +166,6 @@ function parseInputJson(silent = false) {
   }
 }
 
-// =================== RENDER PIPELINE ===================
 function renderAll(silent = false) {
   const dutyRows = normalizeDutyDaysForTable(lastParsedDutyDays);
 
@@ -193,10 +178,14 @@ function renderAll(silent = false) {
 
   const withBucket = tagDutiesByWindow(dutyRows, windows);
 
-  // OA overnight mapping: OA appears only on "d1" date of "OA d1/d2 XXX"
-  const oaStartDateKeys = computeOAStartDateKeys(withBucket);
+  const oaFromRemark = computeOAStartDateKeys(withBucket);
 
-  const withFlags = withBucket.map(r => addFlags(r, oaStartDateKeys));
+  // NEW: OA from LO + hotel BNEO
+  const oaFromHotel = computeOAFromOwnAccom(withBucket);
+
+  const oaUnion = new Set([...oaFromRemark, ...oaFromHotel]);
+
+  const withFlags = withBucket.map(r => addFlags(r, oaUnion));
 
   renderSummary(withFlags, windows, payRunType);
   renderDutiesTable(withFlags);
@@ -204,7 +193,6 @@ function renderAll(silent = false) {
   if (!silent) log(`Rendered | Duties=${dutyRows.length}`);
 }
 
-// =================== WINDOWS ===================
 function computeWindows(fortnightStartISO, payDateISO) {
   if (!fortnightStartISO) return null;
 
@@ -268,7 +256,6 @@ function renderWindows(windows, payRunType) {
   `;
 }
 
-// =================== BUCKET TAGGING ===================
 function tagDutiesByWindow(duties, windows) {
   if (!windows) return duties.map(d => ({ ...d, bucket: "" }));
 
@@ -282,7 +269,7 @@ function tagDutiesByWindow(duties, windows) {
   });
 }
 
-// =================== OA (only d1 date gets OA) ===================
+// OA 12/13 BNE → OA only on 12DEC25 (start day)
 function computeOAStartDateKeys(rows) {
   const out = new Set();
   for (const r of rows) {
@@ -302,6 +289,19 @@ function computeOAStartDateKeys(rows) {
   return out;
 }
 
+// NEW: LO + hotel includes BNEO => OA
+function computeOAFromOwnAccom(rows) {
+  const out = new Set();
+  for (const r of rows) {
+    const dutyCodesAll = String(r.dutyCodesAll || "");
+    const hasLO = /\bLO\b/.test(dutyCodesAll) || r.duty === "LO";
+    const hotels = String(r.hotel || "");
+    const hasBNEO = /\bBNEO\b/.test(hotels);
+    if (hasLO && hasBNEO) out.add(r.startDate);
+  }
+  return out;
+}
+
 function dateToRosterKey(dt) {
   const dd = String(dt.getDate()).padStart(2, '0');
   const mmm = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][dt.getMonth()];
@@ -309,7 +309,6 @@ function dateToRosterKey(dt) {
   return `${dd}${mmm}${yy}`;
 }
 
-// =================== FLAGS ===================
 function addFlags(r, oaStartDateKeys) {
   const flags = [];
 
@@ -331,7 +330,6 @@ function addFlags(r, oaStartDateKeys) {
   return { ...r, flags };
 }
 
-// =================== SUMMARY ===================
 function renderSummary(rows, windows, payRunType) {
   if (!windows) {
     elSummary.innerHTML = `<div class="muted">Pick a fortnight start date to see counts by posting window.</div>`;
@@ -379,7 +377,6 @@ function renderSummary(rows, windows, payRunType) {
   `;
 }
 
-// =================== DUTIES TABLE ===================
 function renderDutiesTable(rows) {
   if (!rows.length) {
     elDuties.innerHTML = '<div class="muted">No duties detected.</div>';
@@ -417,7 +414,6 @@ function renderDutiesTable(rows) {
   elDuties.innerHTML = html;
 }
 
-// =================== NORMALIZE ===================
 function normalizeDutyDaysForTable(days) {
   return (days || []).map(d => ({
     startDate: d.startDate || '',
@@ -432,23 +428,27 @@ function normalizeDutyDaysForTable(days) {
   }));
 }
 
-// =================== PDF PARSER v15 (X-COLUMN SECTORS) ===================
+// ===== PDF PARSER: airport-only sector pairing =====
 async function parseRosterPdfToDutyDays(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
 
-  // We'll detect the "Sector" column bounds from the header row.
-  // Then for each row containing a VA flight number, extract tokens inside Sector column x-range.
-  let sectorX = null; // { left, right }
+  let sectorX = null;
   let headerFound = false;
-  const parserDebug = { headerFound: false, sectorX: null, notes: [], sampleRows: [] };
 
+  const parserDebug = { headerFound: false, sectorX: null, notes: [], sampleRows: [] };
   const dutyDays = [];
   let current = null;
 
   const dateRe = /\b\d{2}[A-Z]{3}\d{2}\b/;
   const dowRe  = /\b(SUN|MON|TUE|WED|THU|FRI|SAT)\b/;
   const DOW = new Set(["SUN","MON","TUE","WED","THU","FRI","SAT"]);
+
+  const NOT_AIRPORT = new Set([
+    "STD","STA","RPT","SIM","DAY","OFF",
+    "TVL","FLY","RDO","FWA","LO",
+    "BNEO","MEL1","CBR5","OOL1","PER1",
+  ]);
 
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
@@ -461,38 +461,33 @@ async function parseRosterPdfToDutyDays(file) {
       })
       .filter(i => i.str);
 
-    // Group into "rows" by Y
-    const rows = groupByY(items, 1.2); // tolerance
+    const rows = groupByY(items, 1.2);
+
     for (const row of rows) {
       row.sort((a,b)=>a.x-b.x);
       const text = row.map(i=>i.str).join(' ').replace(/\s+/g,' ').trim();
 
-      // Skip obvious headers/footers
       if (/Roster Report|Hotel Codes|Training Codes|Duty Codes/i.test(text)) continue;
 
-      // Detect header once: look for "Flight Number" and "Sector" in same row
       if (!headerFound && /Flight\s+Number/i.test(text) && /\bSector\b/i.test(text)) {
         headerFound = true;
         parserDebug.headerFound = true;
 
-        const flightTok = row.find(i => /^Flight$/i.test(i.str));
         const sectorTok = row.find(i => /^Sector$/i.test(i.str));
         const acTok = row.find(i => /^A\/C$/i.test(i.str) || /^A\/C$/i.test(i.str.replace(/\s/g,'')));
 
-        // If we found x positions, set sector range: from Sector.x-10 to A/C.x-10 (or Sector.x+60 fallback)
         if (sectorTok) {
           const left = sectorTok.x - 8;
           const right = acTok ? (acTok.x - 8) : (sectorTok.x + 90);
           sectorX = { left, right };
           parserDebug.sectorX = sectorX;
-          parserDebug.notes.push(`Header found p${p}. Sector column approx x=[${left.toFixed(1)}, ${right.toFixed(1)}]`);
+          parserDebug.notes.push(`Header found p${p}. Sector x=[${left.toFixed(1)}, ${right.toFixed(1)}]`);
         } else {
-          parserDebug.notes.push(`Header found but Sector token missing x (unexpected).`);
+          parserDebug.notes.push(`Header found but Sector token missing x.`);
         }
         continue;
       }
 
-      // New day start
       const dm = text.match(dateRe);
       const dow = text.match(dowRe);
       const dateNearStart = dm && text.indexOf(dm[0]) <= 6;
@@ -504,54 +499,50 @@ async function parseRosterPdfToDutyDays(file) {
       }
       if (!current) continue;
 
-      // Duty codes
       (text.match(/\bFLY|TVL|LO|RDO\b/g) || []).forEach(c => current.dutyCodes.push(c));
-
-      // Flights
       (text.match(/\bVA\s?\d{3,4}\b/g) || []).forEach(f => current.flights.push(f.replace(/\s+/g, '')));
 
-      // Times (HHMM only)
       (text.match(/\b\d{4}\b/g) || []).forEach(raw => {
         const hh = parseInt(raw.slice(0,2), 10);
         const mm = parseInt(raw.slice(2,4), 10);
         if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) current.times.push(raw);
       });
 
-      // Remarks
       (text.match(/\bRTP\d[\w-]*\b/g) || []).forEach(r => current.remarks.push(r));
       (text.match(/\bOA\s+\d{1,2}\/\d{1,2}\s+[A-Z]{3}\b/g) || []).forEach(o => current.remarks.push(o));
 
-      // Hotels (rough)
       (text.match(/\b[A-Z]{3}\d\b|\b[A-Z]{4}\b/g) || []).forEach(h => {
         if (/^RTP/i.test(h)) return;
         if (DOW.has(h)) return;
         if (/^[A-Z]{4}$/.test(h) || /^[A-Z]{3}\d$/.test(h)) current.hotels.push(h);
       });
 
-      // ---- SECTORS v15: If this row contains a VA flight and we know sector column x-range, extract IATA tokens from that column ----
-      const hasFlight = row.some(i => /^VA$/i.test(i.str) || /^VA\d{3,4}$/i.test(i.str.replace(/\s+/g,'')) || /^VA\s?\d{3,4}$/i.test(i.str));
-      if (hasFlight && sectorX) {
-        const sectorTokens = row
+      const hasVaFlight = row.some(i => /\bVA\d{3,4}\b/.test(i.str.replace(/\s+/g,'')));
+      if (hasVaFlight && sectorX) {
+        const rawTokens = row
           .filter(i => i.x >= sectorX.left && i.x <= sectorX.right)
           .map(i => i.str.toUpperCase())
-          .filter(s => /^[A-Z]{3}$/.test(s))
-          .filter(s => !DOW.has(s) && !["STD","STA","RPT"].includes(s));
+          .flatMap(s => s.split(/[^A-Z]/g).filter(Boolean));
 
-        // Pair sequentially: BNE CNS => BNE-CNS; if only one token, keep as "BNE-?"
-        if (sectorTokens.length >= 2) {
-          for (let i = 0; i + 1 < sectorTokens.length; i += 2) {
-            const a = sectorTokens[i], b = sectorTokens[i+1];
+        const airportTokens = rawTokens
+          .filter(s => /^[A-Z]{3}$/.test(s))
+          .filter(s => !DOW.has(s))
+          .filter(s => !NOT_AIRPORT.has(s));
+
+        if (airportTokens.length >= 2) {
+          for (let i = 0; i + 1 < airportTokens.length; i += 2) {
+            const a = airportTokens[i], b = airportTokens[i+1];
             if (a && b && a !== b) current.sectors.push(`${a}-${b}`);
           }
         }
 
-        // Debug sample a few rows
-        if (parserDebug.sampleRows.length < 8) {
+        if (parserDebug.sampleRows.length < 10) {
           parserDebug.sampleRows.push({
             page: p,
             day: current.startDate,
             rowText: text,
-            sectorTokens,
+            rawTokens,
+            airportTokens,
             sectorX
           });
         }
@@ -561,7 +552,6 @@ async function parseRosterPdfToDutyDays(file) {
 
   if (current) dutyDays.push(current);
 
-  // Final clean / dedupe
   for (const d of dutyDays) {
     d.dutyCodes = uniq(d.dutyCodes);
     d.flights   = uniq(d.flights);
@@ -572,14 +562,13 @@ async function parseRosterPdfToDutyDays(file) {
   }
 
   if (!parserDebug.headerFound) {
-    parserDebug.notes.push("WARNING: Table header not found; sector column x-range unavailable (sectors may be blank).");
+    parserDebug.notes.push("WARNING: Header not found; sector column x-range unavailable.");
   }
 
   return { dutyDays, parserDebug };
 }
 
 function groupByY(items, tol = 1.0) {
-  // Group by similar y (within tol)
   const sorted = [...items].sort((a,b)=> b.y - a.y);
   const out = [];
   for (const it of sorted) {
@@ -592,7 +581,6 @@ function groupByY(items, tol = 1.0) {
   return out;
 }
 
-// =================== DATE HELPERS ===================
 function isoToDate(iso) {
   const [y,m,d] = iso.split('-').map(n => parseInt(n,10));
   return new Date(y, m-1, d);
@@ -626,7 +614,6 @@ function rosterDateToDate(ddmmmyy) {
   return new Date(2000 + yy, mm, dd);
 }
 
-// =================== MISC HELPERS ===================
 function uniq(arr) { return [...new Set((arr || []).filter(Boolean))]; }
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"]/g, c =>
