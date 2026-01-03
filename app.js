@@ -4,6 +4,7 @@ const elStatus  = document.getElementById('status');
 const elWindows = document.getElementById('windows');
 const elSummary = document.getElementById('summary');
 const elDuties  = document.getElementById('duties');
+const elDebug   = document.getElementById('debug');
 
 const pasteBtn  = document.getElementById('pasteBtn');
 const clearBtn  = document.getElementById('clearBtn');
@@ -19,13 +20,17 @@ function log(msg) {
   console.log(line);
   if (elStatus) elStatus.textContent = line;
 }
+function debug(obj) {
+  if (!elDebug) return;
+  elDebug.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+}
 window.addEventListener('error', (e) => log(`JS ERROR: ${e.message}`));
 window.addEventListener('unhandledrejection', (e) => {
   const msg = e?.reason?.message || String(e.reason || e);
   log(`PROMISE ERROR: ${msg}`);
 });
 
-log("app.js loaded ✅ (v14)");
+log("app.js loaded ✅ (v15)");
 
 // =================== STATE ===================
 let lastParsedDutyDays = [];
@@ -88,9 +93,10 @@ clearBtn?.addEventListener('click', () => {
   log("Clear clicked");
   elInput.value = '';
   lastParsedDutyDays = [];
-  elWindows.innerHTML = '';
-  elSummary.innerHTML = '';
-  elDuties.innerHTML = '';
+  if (elWindows) elWindows.innerHTML = '';
+  if (elSummary) elSummary.innerHTML = '';
+  if (elDuties) elDuties.innerHTML = '';
+  if (elDebug) elDebug.textContent = '';
 });
 
 elInput?.addEventListener('input', () => {
@@ -117,8 +123,7 @@ window.__onPdfSelected = function (input) {
 
 pdfFile?.addEventListener('change', (e) => {
   const file = e.target.files?.[0];
-  if (!file) return log("No file selected (standard handler)");
-  log("Standard change fired");
+  if (!file) return log("No file selected");
   handlePdfFile(file);
 });
 
@@ -128,9 +133,10 @@ async function handlePdfFile(file) {
     if (!window.pdfjsLib) throw new Error("PDF.js not loaded (pdfjsLib undefined)");
 
     log("Starting PDF parse…");
-    const dutyDays = await parseRosterPdfToDutyDays(file);
-    log(`PDF parsed. Duty-days found: ${dutyDays.length}`);
+    const { dutyDays, parserDebug } = await parseRosterPdfToDutyDays(file);
+    debug(parserDebug);
 
+    log(`PDF parsed. Duty-days found: ${dutyDays.length}`);
     lastParsedDutyDays = dutyDays;
 
     elInput.value = JSON.stringify({
@@ -165,12 +171,8 @@ function parseInputJson(silent = false) {
   if (!txt) return;
 
   let data;
-  try {
-    data = JSON.parse(txt);
-  } catch {
-    if (!silent) log("Invalid JSON in textarea");
-    return;
-  }
+  try { data = JSON.parse(txt); }
+  catch { if (!silent) log("Invalid JSON"); return; }
 
   if (Array.isArray(data?.duties)) {
     lastParsedDutyDays = data.duties;
@@ -191,7 +193,7 @@ function renderAll(silent = false) {
 
   const withBucket = tagDutiesByWindow(dutyRows, windows);
 
-  // OA is overnight-based: build a set of "startDate keys" that should have OA.
+  // OA overnight mapping: OA appears only on "d1" date of "OA d1/d2 XXX"
   const oaStartDateKeys = computeOAStartDateKeys(withBucket);
 
   const withFlags = withBucket.map(r => addFlags(r, oaStartDateKeys));
@@ -280,13 +282,9 @@ function tagDutiesByWindow(duties, windows) {
   });
 }
 
-// =================== OA (FIXED: ONLY FIRST DATE GETS OA) ===================
-// We parse ALL "OA d1/d2 XXX" strings found anywhere in the roster,
-// and set OA on the calendar date matching d1 in the same month/year as the row's startDate.
-// This makes OA appear on 12DEC25 only for "OA 12/13 BNE", even if the remark repeats on 13/14.
+// =================== OA (only d1 date gets OA) ===================
 function computeOAStartDateKeys(rows) {
   const out = new Set();
-
   for (const r of rows) {
     const remarks = String(r.remarks || "");
     const dtBase = rosterDateToDate(r.startDate);
@@ -296,14 +294,11 @@ function computeOAStartDateKeys(rows) {
     for (const s of matches) {
       const m = s.match(/\bOA\s+(\d{1,2})\/(\d{1,2})\s+([A-Z]{3})\b/i);
       if (!m) continue;
-
       const d1 = parseInt(m[1], 10);
-      // attach OA to FIRST date only:
       const oaDate = new Date(dtBase.getFullYear(), dtBase.getMonth(), d1);
       out.add(dateToRosterKey(oaDate));
     }
   }
-
   return out;
 }
 
@@ -314,7 +309,7 @@ function dateToRosterKey(dt) {
   return `${dd}${mmm}${yy}`;
 }
 
-// =================== FLAGS (AUDIT MODE) ===================
+// =================== FLAGS ===================
 function addFlags(r, oaStartDateKeys) {
   const flags = [];
 
@@ -323,12 +318,8 @@ function addFlags(r, oaStartDateKeys) {
   const hasLO  = /\bLO\b/.test(dutyCodesAll);
   const hasTVL = /\bTVL\b/.test(dutyCodesAll);
   const hasRDO = /\bRDO\b/.test(dutyCodesAll);
-
-  // training detection (RTP*)
   const hasTRN = /\bRTP\d/i.test(String(r.remarks || ""));
-
-  // overnight-based OA (ONLY on first-date keys)
-  const hasOA = oaStartDateKeys?.has(r.startDate);
+  const hasOA  = oaStartDateKeys?.has(r.startDate);
 
   if (hasFLY) flags.push("FLY");
   if (hasLO) flags.push("LO");
@@ -441,12 +432,23 @@ function normalizeDutyDaysForTable(days) {
   }));
 }
 
-// =================== PDF PARSER (v14: sector cleanup + heuristic) ===================
+// =================== PDF PARSER v15 (X-COLUMN SECTORS) ===================
 async function parseRosterPdfToDutyDays(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
 
-  const lines = [];
+  // We'll detect the "Sector" column bounds from the header row.
+  // Then for each row containing a VA flight number, extract tokens inside Sector column x-range.
+  let sectorX = null; // { left, right }
+  let headerFound = false;
+  const parserDebug = { headerFound: false, sectorX: null, notes: [], sampleRows: [] };
+
+  const dutyDays = [];
+  let current = null;
+
+  const dateRe = /\b\d{2}[A-Z]{3}\d{2}\b/;
+  const dowRe  = /\b(SUN|MON|TUE|WED|THU|FRI|SAT)\b/;
+  const DOW = new Set(["SUN","MON","TUE","WED","THU","FRI","SAT"]);
 
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
@@ -459,109 +461,135 @@ async function parseRosterPdfToDutyDays(file) {
       })
       .filter(i => i.str);
 
-    const buckets = {};
-    for (const it of items) {
-      const key = `${p}-${Math.round(it.y * 2) / 2}`;
-      (buckets[key] ||= []).push(it);
-    }
+    // Group into "rows" by Y
+    const rows = groupByY(items, 1.2); // tolerance
+    for (const row of rows) {
+      row.sort((a,b)=>a.x-b.x);
+      const text = row.map(i=>i.str).join(' ').replace(/\s+/g,' ').trim();
 
-    for (const k in buckets) {
-      buckets[k].sort((a, b) => a.x - b.x);
-      const text = buckets[k].map(i => i.str).join(' ').replace(/\s+/g, ' ').trim();
-      if (text) lines.push({ page: p, y: buckets[k][0].y, text });
-    }
-  }
+      // Skip obvious headers/footers
+      if (/Roster Report|Hotel Codes|Training Codes|Duty Codes/i.test(text)) continue;
 
-  lines.sort((a, b) => a.page - b.page || b.y - a.y);
+      // Detect header once: look for "Flight Number" and "Sector" in same row
+      if (!headerFound && /Flight\s+Number/i.test(text) && /\bSector\b/i.test(text)) {
+        headerFound = true;
+        parserDebug.headerFound = true;
 
-  const dateRe = /\b\d{2}[A-Z]{3}\d{2}\b/;
-  const dowRe  = /\b(SUN|MON|TUE|WED|THU|FRI|SAT)\b/;
-  const DOW = new Set(["SUN","MON","TUE","WED","THU","FRI","SAT"]);
+        const flightTok = row.find(i => /^Flight$/i.test(i.str));
+        const sectorTok = row.find(i => /^Sector$/i.test(i.str));
+        const acTok = row.find(i => /^A\/C$/i.test(i.str) || /^A\/C$/i.test(i.str.replace(/\s/g,'')));
 
-  const dutyDays = [];
-  let current = null;
+        // If we found x positions, set sector range: from Sector.x-10 to A/C.x-10 (or Sector.x+60 fallback)
+        if (sectorTok) {
+          const left = sectorTok.x - 8;
+          const right = acTok ? (acTok.x - 8) : (sectorTok.x + 90);
+          sectorX = { left, right };
+          parserDebug.sectorX = sectorX;
+          parserDebug.notes.push(`Header found p${p}. Sector column approx x=[${left.toFixed(1)}, ${right.toFixed(1)}]`);
+        } else {
+          parserDebug.notes.push(`Header found but Sector token missing x (unexpected).`);
+        }
+        continue;
+      }
 
-  for (const ln of lines) {
-    const t = ln.text;
+      // New day start
+      const dm = text.match(dateRe);
+      const dow = text.match(dowRe);
+      const dateNearStart = dm && text.indexOf(dm[0]) <= 6;
+      const isNewDay = Boolean(dateNearStart && dow && text.indexOf(dow[0]) < 25);
 
-    if (/Roster Report|Hotel Codes|Training Codes|Duty Codes/i.test(t)) continue;
-    if (/Start Date|Pairing Duty|Flt Time|Duty Time|Sign Off/i.test(t)) continue;
+      if (isNewDay) {
+        if (current) dutyDays.push(current);
+        current = { startDate: dm[0], dutyCodes: [], flights: [], sectors: [], times: [], hotels: [], remarks: [] };
+      }
+      if (!current) continue;
 
-    const dm = t.match(dateRe);
-    const dow = t.match(dowRe);
-    const dateNearStart = dm && t.indexOf(dm[0]) <= 6;
-    const isNewDay = Boolean(dateNearStart && dow && t.indexOf(dow[0]) < 25);
+      // Duty codes
+      (text.match(/\bFLY|TVL|LO|RDO\b/g) || []).forEach(c => current.dutyCodes.push(c));
 
-    if (isNewDay) {
-      if (current) dutyDays.push(current);
-      current = { startDate: dm[0], dutyCodes: [], flights: [], sectors: [], times: [], hotels: [], remarks: [] };
-    }
+      // Flights
+      (text.match(/\bVA\s?\d{3,4}\b/g) || []).forEach(f => current.flights.push(f.replace(/\s+/g, '')));
 
-    if (!current) continue;
+      // Times (HHMM only)
+      (text.match(/\b\d{4}\b/g) || []).forEach(raw => {
+        const hh = parseInt(raw.slice(0,2), 10);
+        const mm = parseInt(raw.slice(2,4), 10);
+        if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) current.times.push(raw);
+      });
 
-    // Duty codes
-    t.match(/\bFLY|TVL|LO|RDO\b/g)?.forEach(c => current.dutyCodes.push(c));
+      // Remarks
+      (text.match(/\bRTP\d[\w-]*\b/g) || []).forEach(r => current.remarks.push(r));
+      (text.match(/\bOA\s+\d{1,2}\/\d{1,2}\s+[A-Z]{3}\b/g) || []).forEach(o => current.remarks.push(o));
 
-    // Flights
-    t.match(/\bVA\s?\d{3,4}\b/g)?.forEach(f => current.flights.push(f.replace(/\s+/g, '')));
+      // Hotels (rough)
+      (text.match(/\b[A-Z]{3}\d\b|\b[A-Z]{4}\b/g) || []).forEach(h => {
+        if (/^RTP/i.test(h)) return;
+        if (DOW.has(h)) return;
+        if (/^[A-Z]{4}$/.test(h) || /^[A-Z]{3}\d$/.test(h)) current.hotels.push(h);
+      });
 
-    // Times (HHMM only)
-    (t.match(/\b\d{4}\b/g) || []).forEach(raw => {
-      const hh = parseInt(raw.slice(0,2), 10);
-      const mm = parseInt(raw.slice(2,4), 10);
-      if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) current.times.push(raw);
-    });
+      // ---- SECTORS v15: If this row contains a VA flight and we know sector column x-range, extract IATA tokens from that column ----
+      const hasFlight = row.some(i => /^VA$/i.test(i.str) || /^VA\d{3,4}$/i.test(i.str.replace(/\s+/g,'')) || /^VA\s?\d{3,4}$/i.test(i.str));
+      if (hasFlight && sectorX) {
+        const sectorTokens = row
+          .filter(i => i.x >= sectorX.left && i.x <= sectorX.right)
+          .map(i => i.str.toUpperCase())
+          .filter(s => /^[A-Z]{3}$/.test(s))
+          .filter(s => !DOW.has(s) && !["STD","STA","RPT"].includes(s));
 
-    // Remarks (training + OA)
-    t.match(/\bRTP\d[\w-]*\b/g)?.forEach(r => current.remarks.push(r));
-    t.match(/\bOA\s+\d{1,2}\/\d{1,2}\s+[A-Z]{3}\b/g)?.forEach(o => current.remarks.push(o));
+        // Pair sequentially: BNE CNS => BNE-CNS; if only one token, keep as "BNE-?"
+        if (sectorTokens.length >= 2) {
+          for (let i = 0; i + 1 < sectorTokens.length; i += 2) {
+            const a = sectorTokens[i], b = sectorTokens[i+1];
+            if (a && b && a !== b) current.sectors.push(`${a}-${b}`);
+          }
+        }
 
-    // Hotels (rough)
-    (t.match(/\b[A-Z]{3}\d\b|\b[A-Z]{4}\b/g) || []).forEach(h => {
-      if (/^RTP/i.test(h)) return;
-      if (DOW.has(h)) return;
-      if (/^[A-Z]{4}$/.test(h) || /^[A-Z]{3}\d$/.test(h)) current.hotels.push(h);
-    });
-
-    // ---- Sectors v14 heuristic ----
-    // 1) Gather all 3-letter tokens (IATA-ish), remove weekdays + obvious non-airports.
-    const tokens = (t.match(/\b[A-Z]{3}\b/g) || [])
-      .map(x => x.toUpperCase())
-      .filter(x => !DOW.has(x))
-      .filter(x => !["STD","STA","RPT","SIM","DAY","OFF","DUT"].includes(x));
-
-    // 2) Pair sequentially: BNE CNS BNE => BNE-CNS, CNS-BNE
-    // 3) De-dupe and ignore nonsense like XXX-XXX same.
-    for (let i = 0; i + 1 < tokens.length; i++) {
-      const a = tokens[i], b = tokens[i+1];
-      if (a === b) continue;
-      if (!/^[A-Z]{3}$/.test(a) || !/^[A-Z]{3}$/.test(b)) continue;
-      current.sectors.push(`${a}-${b}`);
+        // Debug sample a few rows
+        if (parserDebug.sampleRows.length < 8) {
+          parserDebug.sampleRows.push({
+            page: p,
+            day: current.startDate,
+            rowText: text,
+            sectorTokens,
+            sectorX
+          });
+        }
+      }
     }
   }
 
   if (current) dutyDays.push(current);
 
-  // Final clean + de-dupe.
-  // Important: explicitly REMOVE weekday-based fake sectors like SAT-BNE, SUN-BNE, MON-SYD etc.
-  dutyDays.forEach(d => {
+  // Final clean / dedupe
+  for (const d of dutyDays) {
     d.dutyCodes = uniq(d.dutyCodes);
     d.flights   = uniq(d.flights);
     d.times     = uniq(d.times);
     d.hotels    = uniq(d.hotels);
     d.remarks   = uniq(d.remarks);
+    d.sectors   = uniq((d.sectors || []).filter(s => /^[A-Z]{3}-[A-Z]{3}$/.test(s)));
+  }
 
-    const DOW = new Set(["SUN","MON","TUE","WED","THU","FRI","SAT"]);
-    d.sectors = uniq((d.sectors || []).filter(s => {
-      if (!/^[A-Z]{3}-[A-Z]{3}$/.test(s)) return false;
-      const [a,b] = s.split("-");
-      if (DOW.has(a) || DOW.has(b)) return false;   // THIS kills SAT-BNE etc
-      if (a === "STD" || a === "STA" || b === "STD" || b === "STA") return false;
-      return true;
-    }));
-  });
+  if (!parserDebug.headerFound) {
+    parserDebug.notes.push("WARNING: Table header not found; sector column x-range unavailable (sectors may be blank).");
+  }
 
-  return dutyDays;
+  return { dutyDays, parserDebug };
+}
+
+function groupByY(items, tol = 1.0) {
+  // Group by similar y (within tol)
+  const sorted = [...items].sort((a,b)=> b.y - a.y);
+  const out = [];
+  for (const it of sorted) {
+    let placed = false;
+    for (const g of out) {
+      if (Math.abs(g[0].y - it.y) <= tol) { g.push(it); placed = true; break; }
+    }
+    if (!placed) out.push([it]);
+  }
+  return out;
 }
 
 // =================== DATE HELPERS ===================
