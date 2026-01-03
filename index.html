@@ -104,17 +104,11 @@
         <div style="flex:1 1 260px;">
           <label for="fortnightStart">Fortnight start date (primary)</label><br/>
           <input id="fortnightStart" type="date" />
-          <div class="muted" style="margin-top:6px;">
-            This drives the CURRENT (standard pay) window.
-          </div>
         </div>
 
         <div style="flex:1 1 260px;">
           <label for="payDate">Pay date (helper)</label><br/>
           <input id="payDate" type="date" />
-          <div class="muted" style="margin-top:6px;">
-            Optional. Suggests fortnight start using your observed pattern.
-          </div>
         </div>
 
         <div style="flex:1 1 320px;">
@@ -123,9 +117,6 @@
             <option value="allowances">Allowances from previous fortnight</option>
             <option value="wdo_ot">WDO / Overtime from previous fortnight</option>
           </select>
-          <div class="muted" style="margin-top:6px;">
-            Standard pay always applies to CURRENT window.
-          </div>
         </div>
       </div>
 
@@ -149,7 +140,7 @@
   </main>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="app.js?v=15"></script>
+  <script src="app.js?v=16"></script>
   <script>
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
   </script>
