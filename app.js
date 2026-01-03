@@ -25,7 +25,7 @@ window.addEventListener('unhandledrejection', (e) => {
   log(`PROMISE ERROR: ${msg}`);
 });
 
-log("app.js loaded ✅ (v13)");
+log("app.js loaded ✅ (v14)");
 
 // =================== STATE ===================
 let lastParsedDutyDays = [];
@@ -191,9 +191,10 @@ function renderAll(silent = false) {
 
   const withBucket = tagDutiesByWindow(dutyRows, windows);
 
-  // OA is overnight-based: compute OA nights first, then apply flags
-  const oaNights = computeOANights(withBucket);
-  const withFlags = withBucket.map(r => addFlags(r, oaNights));
+  // OA is overnight-based: build a set of "startDate keys" that should have OA.
+  const oaStartDateKeys = computeOAStartDateKeys(withBucket);
+
+  const withFlags = withBucket.map(r => addFlags(r, oaStartDateKeys));
 
   renderSummary(withFlags, windows, payRunType);
   renderDutiesTable(withFlags);
@@ -279,36 +280,31 @@ function tagDutiesByWindow(duties, windows) {
   });
 }
 
-// =================== OA NIGHTS (OVERNIGHT-AWARE) ===================
-// Parses "OA 12/13 BNE" and maps OA to the FIRST date (12DEC25) so it counts once.
-function computeOANights(rows) {
-  const map = new Map(); // key: startDate (DDMMMYY) -> true
-  for (const r of rows) {
-    const remarkStr = String(r.remarks || "");
-    const m = remarkStr.match(/\bOA\s+(\d{1,2})\/(\d{1,2})\s+([A-Z]{3})\b/i);
-    if (!m) continue;
+// =================== OA (FIXED: ONLY FIRST DATE GETS OA) ===================
+// We parse ALL "OA d1/d2 XXX" strings found anywhere in the roster,
+// and set OA on the calendar date matching d1 in the same month/year as the row's startDate.
+// This makes OA appear on 12DEC25 only for "OA 12/13 BNE", even if the remark repeats on 13/14.
+function computeOAStartDateKeys(rows) {
+  const out = new Set();
 
-    const d1 = parseInt(m[1], 10);
-    // const d2 = parseInt(m[2], 10); // currently unused (we don't need the second day)
-    const base = r.startDate; // e.g. 12DEC25 (we assume OA printed on the relevant overnight block)
-    const dtBase = rosterDateToDate(base);
+  for (const r of rows) {
+    const remarks = String(r.remarks || "");
+    const dtBase = rosterDateToDate(r.startDate);
     if (!dtBase) continue;
 
-    // If the base day doesn't equal d1, we find the date in the same month/year that matches d1
-    // (because OA can appear on multiple lines; we want the first date in the pair)
-    let oaDate = dtBase;
-    if (dtBase.getDate() !== d1) {
-      oaDate = new Date(dtBase.getFullYear(), dtBase.getMonth(), d1);
-      // If that jumps forward too far (end of month), pull back a month
-      if (Math.abs(oaDate - dtBase) > 10 * 24 * 3600 * 1000) {
-        oaDate = new Date(dtBase.getFullYear(), dtBase.getMonth() - 1, d1);
-      }
-    }
+    const matches = remarks.match(/\bOA\s+\d{1,2}\/\d{1,2}\s+[A-Z]{3}\b/gi) || [];
+    for (const s of matches) {
+      const m = s.match(/\bOA\s+(\d{1,2})\/(\d{1,2})\s+([A-Z]{3})\b/i);
+      if (!m) continue;
 
-    const key = dateToRosterKey(oaDate); // DDMMMYY
-    map.set(key, true);
+      const d1 = parseInt(m[1], 10);
+      // attach OA to FIRST date only:
+      const oaDate = new Date(dtBase.getFullYear(), dtBase.getMonth(), d1);
+      out.add(dateToRosterKey(oaDate));
+    }
   }
-  return map;
+
+  return out;
 }
 
 function dateToRosterKey(dt) {
@@ -319,7 +315,7 @@ function dateToRosterKey(dt) {
 }
 
 // =================== FLAGS (AUDIT MODE) ===================
-function addFlags(r, oaNightsMap) {
+function addFlags(r, oaStartDateKeys) {
   const flags = [];
 
   const dutyCodesAll = r.dutyCodesAll || "";
@@ -331,8 +327,8 @@ function addFlags(r, oaNightsMap) {
   // training detection (RTP*)
   const hasTRN = /\bRTP\d/i.test(String(r.remarks || ""));
 
-  // overnight-based OA
-  const hasOA = oaNightsMap?.has(r.startDate);
+  // overnight-based OA (ONLY on first-date keys)
+  const hasOA = oaStartDateKeys?.has(r.startDate);
 
   if (hasFLY) flags.push("FLY");
   if (hasLO) flags.push("LO");
@@ -437,10 +433,7 @@ function normalizeDutyDaysForTable(days) {
     duty: (d.dutyCodes && d.dutyCodes[0]) || '',
     dutyCodesAll: (d.dutyCodes || []).join(' '),
     flightNumber: (d.flights || []).join(', '),
-
-    // Sectors are cleaned in the parser now; still join as comma list here
     sector: (d.sectors || []).join(', '),
-
     rpt: (d.times || [])[0] || '',
     signOff: (d.times || []).slice(-1)[0] || '',
     hotel: (d.hotels || []).join(', '),
@@ -448,7 +441,7 @@ function normalizeDutyDaysForTable(days) {
   }));
 }
 
-// =================== PDF PARSER (v13 improvements) ===================
+// =================== PDF PARSER (v14: sector cleanup + heuristic) ===================
 async function parseRosterPdfToDutyDays(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
@@ -483,6 +476,7 @@ async function parseRosterPdfToDutyDays(file) {
 
   const dateRe = /\b\d{2}[A-Z]{3}\d{2}\b/;
   const dowRe  = /\b(SUN|MON|TUE|WED|THU|FRI|SAT)\b/;
+  const DOW = new Set(["SUN","MON","TUE","WED","THU","FRI","SAT"]);
 
   const dutyDays = [];
   let current = null;
@@ -491,7 +485,6 @@ async function parseRosterPdfToDutyDays(file) {
     const t = ln.text;
 
     if (/Roster Report|Hotel Codes|Training Codes|Duty Codes/i.test(t)) continue;
-    if (/\bSTD\b.*\bSTA\b/i.test(t)) continue;
     if (/Start Date|Pairing Duty|Flt Time|Duty Time|Sign Off/i.test(t)) continue;
 
     const dm = t.match(dateRe);
@@ -512,25 +505,6 @@ async function parseRosterPdfToDutyDays(file) {
     // Flights
     t.match(/\bVA\s?\d{3,4}\b/g)?.forEach(f => current.flights.push(f.replace(/\s+/g, '')));
 
-    // --- Sector extraction FIX ---
-    // Extract true IATA-IATA only, and ignore weekday contamination
-    // We accept both "BNE CNS" and "BNE-CNS" patterns.
-    const rawPairs = [];
-    (t.match(/\b[A-Z]{3}\s+[A-Z]{3}\b/g) || []).forEach(s => rawPairs.push(s));
-    (t.match(/\b[A-Z]{3}-[A-Z]{3}\b/g) || []).forEach(s => rawPairs.push(s.replace('-', ' ')));
-
-    const isDow = (x) => ["SUN","MON","TUE","WED","THU","FRI","SAT"].includes(x);
-    for (const rp of rawPairs) {
-      const parts = rp.trim().split(/\s+/);
-      if (parts.length !== 2) continue;
-      const a = parts[0], b = parts[1];
-      // skip weekday tokens
-      if (isDow(a) || isDow(b)) continue;
-      // basic IATA sanity: 3 letters, not "STD"/"STA"
-      if (a === "STD" || a === "STA" || b === "STD" || b === "STA") continue;
-      current.sectors.push(`${a}-${b}`);
-    }
-
     // Times (HHMM only)
     (t.match(/\b\d{4}\b/g) || []).forEach(raw => {
       const hh = parseInt(raw.slice(0,2), 10);
@@ -542,24 +516,49 @@ async function parseRosterPdfToDutyDays(file) {
     t.match(/\bRTP\d[\w-]*\b/g)?.forEach(r => current.remarks.push(r));
     t.match(/\bOA\s+\d{1,2}\/\d{1,2}\s+[A-Z]{3}\b/g)?.forEach(o => current.remarks.push(o));
 
-    // Hotel codes (rough)
+    // Hotels (rough)
     (t.match(/\b[A-Z]{3}\d\b|\b[A-Z]{4}\b/g) || []).forEach(h => {
       if (/^RTP/i.test(h)) return;
-      if (["SUN","MON","TUE","WED","THU","FRI","SAT"].includes(h)) return;
+      if (DOW.has(h)) return;
       if (/^[A-Z]{4}$/.test(h) || /^[A-Z]{3}\d$/.test(h)) current.hotels.push(h);
     });
+
+    // ---- Sectors v14 heuristic ----
+    // 1) Gather all 3-letter tokens (IATA-ish), remove weekdays + obvious non-airports.
+    const tokens = (t.match(/\b[A-Z]{3}\b/g) || [])
+      .map(x => x.toUpperCase())
+      .filter(x => !DOW.has(x))
+      .filter(x => !["STD","STA","RPT","SIM","DAY","OFF","DUT"].includes(x));
+
+    // 2) Pair sequentially: BNE CNS BNE => BNE-CNS, CNS-BNE
+    // 3) De-dupe and ignore nonsense like XXX-XXX same.
+    for (let i = 0; i + 1 < tokens.length; i++) {
+      const a = tokens[i], b = tokens[i+1];
+      if (a === b) continue;
+      if (!/^[A-Z]{3}$/.test(a) || !/^[A-Z]{3}$/.test(b)) continue;
+      current.sectors.push(`${a}-${b}`);
+    }
   }
 
   if (current) dutyDays.push(current);
 
-  // Dedupe & final clean
+  // Final clean + de-dupe.
+  // Important: explicitly REMOVE weekday-based fake sectors like SAT-BNE, SUN-BNE, MON-SYD etc.
   dutyDays.forEach(d => {
     d.dutyCodes = uniq(d.dutyCodes);
     d.flights   = uniq(d.flights);
-    d.sectors   = uniq(d.sectors.filter(s => /^[A-Z]{3}-[A-Z]{3}$/.test(s)));
     d.times     = uniq(d.times);
     d.hotels    = uniq(d.hotels);
     d.remarks   = uniq(d.remarks);
+
+    const DOW = new Set(["SUN","MON","TUE","WED","THU","FRI","SAT"]);
+    d.sectors = uniq((d.sectors || []).filter(s => {
+      if (!/^[A-Z]{3}-[A-Z]{3}$/.test(s)) return false;
+      const [a,b] = s.split("-");
+      if (DOW.has(a) || DOW.has(b)) return false;   // THIS kills SAT-BNE etc
+      if (a === "STD" || a === "STA" || b === "STD" || b === "STA") return false;
+      return true;
+    }));
   });
 
   return dutyDays;
